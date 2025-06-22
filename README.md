@@ -146,7 +146,7 @@ For my setup I observed the following behaviours:
     xhost +local:root
     ```
 
-2. Open the repo root folder in a Dev Contaier in VScode
+2. Open the repo root folder in a Dev Container in VScode
 
 3. Test isaac sim works
 
