@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<robot name="strange_robot">
+  <!-- Base Wheel Link -->
+  <link name="base_link">
+    <inertial>
+      <mass value="1.0"/>
+      <origin xyz="0 0 0.05"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 -1.57 0"/>
+      <geometry><cylinder radius="0.05" length="0.05"/></geometry>
+    </visual>
+  </link>
+
+  <!-- Joint to Vertical Rod (M1) -->
+  <link name="link_m1">
+    <inertial>
+      <mass value="1.0"/>
+      <origin xyz="0 0 0.2"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.2"/>
+      <geometry><cylinder radius="0.06" length="0.2"/></geometry>
+    </visual>
+  </link>
+
+  <joint name="wheel_to_m1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link_m1"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="100000" velocity="1000"/>
+  </joint>
+
+
+</robot>

@@ -1,0 +1,178 @@
+--- git status ---
+On branch master
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_cfg.py
+	modified:   source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env.py
+	modified:   source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env_cfg.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	launch.sh
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_cfg.py b/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_cfg.py
+index 94ddc35..1f24f35 100644
+--- a/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_cfg.py
++++ b/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_cfg.py
+@@ -27,7 +27,7 @@ EXTRANGE_ROBOT_CFG = ArticulationCfg(
+         pos=(0.0, 0.0, 0.01),
+         joint_pos={
+             "base_to_wheel_joint": 0.0,
+-            "extension_rotation_joint": 0.0,
++            "extension_rotation_joint": 1.57,
+             "extension_tilt_joint": 0.0
+         },
+     ),
+diff --git a/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env.py b/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env.py
+index dc1f4fd..957d585 100644
+--- a/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env.py
++++ b/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env.py
+@@ -90,54 +90,75 @@ class ExtrangeRobotEnv(DirectRLEnv):
+ 
+         obs = torch.cat((pos, vel, imu), dim=-1)
+         return {"policy": obs}
++    
+ 
+     def _get_rewards(self) -> torch.Tensor:
+-        joint_pos = torch.stack([self.joint_pos[:, i] for i in self._joint_indices], dim=-1)
+-        joint_vel = torch.stack([self.joint_vel[:, i] for i in self._joint_indices], dim=-1)
+ 
+-        #penalize body tilt
+         quat = self.robot.data.root_quat_w
++        pos = self.robot.data.root_pos_w
++        ang_vel = self.robot.data.root_ang_vel_w
+         euler = quaternion_to_euler_xyz(quat)
+-        pitch = euler[:, 1]
++
+         roll = euler[:, 0]
+-        orientation_penalty = -0.2 * (torch.abs(pitch) + torch.abs(roll))
++        pitch = euler[:, 1]
++        yaw = euler[:, 2]
+ 
+-        pos_penalty = -0.1 * torch.sum(joint_pos ** 2, dim=-1)
+-        vel_penalty = -0.01 * torch.sum(torch.abs(joint_vel), dim=-1)
++        # magnitud de la inclinación
++        base_tilt = roll ** 2 + pitch ** 2
++        joint_1_pos = self.joint_pos[:, self._joint_indices[1]]
++        joint_2_pos = self.joint_pos[:, self._joint_indices[2]]
++        joint_vel = torch.stack([self.joint_vel[:, i] for i in self._joint_indices], dim=-1)
++        torque = torch.stack([self.robot.data.applied_torque[:, i] for i in self._joint_indices], dim=-1)
++        
+ 
+-        # Incentivar velocidad en eje X (dirección de avance)
+-        lin_vel = self.robot.data.root_lin_vel_w
+-        forward_reward = 1.5 * lin_vel[:, 0] 
+-
+-        # Stay in an objective position
+-        current_pos = self.robot.data.root_pos_w
+-        distance = torch.norm(current_pos - self._goal_pos, dim=-1)
+-        goal_reward = -distance  # menor distancia, mayor recompensa
+-
+-        pos_cost = self.cfg.rew_scale_joint_pos * torch.sum(joint_pos ** 2, dim=-1)
+-        vel_cost = self.cfg.rew_scale_joint_vel * torch.sum(torch.abs(joint_vel), dim=-1)
+-        alive_reward = self.cfg.rew_scale_alive * (1.0 - self.reset_terminated.float())
+-        death_penalty = self.cfg.rew_scale_terminated * self.reset_terminated.float()
+-        reward = (
+-            alive_reward + 
+-            pos_cost + 
+-            vel_cost + 
+-            orientation_penalty + 
+-            goal_reward + 
+-            #forward_reward +
+-            pos_penalty +
+-            vel_penalty +
+-            death_penalty
++        # PRIORIDAD ALTA: verticalidad
++        upright_reward = self.cfg.rew_upright_bonus * torch.exp(-5.0 * base_tilt)
++        base_tilt_penalty = self.cfg.rew_base_tilt_penalty * base_tilt ** 2
++
++        # PRIORIDAD MEDIA: corrección activa con torque
++        tilt_dir = torch.atan2(pitch, roll + 1e-6)
++        torque_wheel = torque[:, 0]
++        torque_effect = -torch.cos(tilt_dir) * torque_wheel
++        correction_reward = self.cfg.rew_balance_correction * torch.sqrt(base_tilt) * torque_effect
++
++        # PRIORIDAD BAJA: mantenerse cerca de Y = 0
++        target_y = self.cfg.target_y_position
++        position_penalty = self.cfg.rew_position_penalty * ((pos[:, 1] - target_y) ** 2)
++
++        # penalización menor por velocidad en joints 1 y 2
++        velocity_penalty = self.cfg.rew_vel_penalty * torch.sum(joint_vel[:, 1:] ** 2, dim=-1)
++
++        # castigo si el joint 1 y 2 se mueve del drift
++        target_tilt = self.cfg.target_tilt_angle
++        target_rotation = self.cfg.target_rotation_angle
++        tilt_target_reward = self.cfg.rew_tilt_target_bonus * torch.exp(-10.0 * (joint_2_pos - target_tilt) ** 2)
++        rotation_target_reward = self.cfg.rew_rotation_target_bonus * torch.exp(-10.0 * (joint_1_pos - target_rotation) ** 2)
++        
++        alive_reward = self.cfg.rew_alive
++
++        total_reward = (
++            alive_reward
++            + upright_reward
++            + correction_reward
++            - base_tilt_penalty
++            - position_penalty
++            - velocity_penalty
++            + rotation_target_reward
++            + tilt_target_reward
+         )
+-        return reward 
++
++        return total_reward
++
+     
+     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+         quat = self.robot.data.root_quat_w  # (num_envs, 4)
+         euler = quaternion_to_euler_xyz(quat)
+-        pitch = euler[:, 0]  # rotación alrededor del eje X
+-
++        roll = euler[:, 0]   # rotación en X
++        pitch = euler[:, 1]  # rotación en Y
+ 
+-        out_of_bounds = torch.abs(pitch) > self.cfg.max_base_orientation_angle
++        # Reinicia si se cae en cualquier eje (X o Y)
++        base_tilt = torch.maximum(torch.abs(roll), torch.abs(pitch))
++        out_of_bounds = base_tilt > self.cfg.max_base_orientation_angle
+         time_out = self.episode_length_buf >= self.max_episode_length - 1
+         return out_of_bounds, time_out
+ 
+diff --git a/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env_cfg.py b/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env_cfg.py
+index ff9b2ff..2245611 100644
+--- a/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env_cfg.py
++++ b/source/extrange_robot/extrange_robot/tasks/direct/extrange_robot/extrange_robot_env_cfg.py
+@@ -45,11 +45,22 @@ class ExtrangeRobotEnvCfg(DirectRLEnvCfg):
+     action_scale = 1.0
+ 
+     # reward parameters
+-    rew_scale_alive = 1.0
+-    rew_scale_terminated = -5.0
+-    rew_scale_joint_pos = -0.1
+-    rew_scale_joint_vel = -0.01
+-
++    # --- Prioridad alta ---
++    rew_upright_bonus = 150.0                # ↑ incentivo fuerte por mantener verticalidad
++    rew_balance_correction = 1000.0           # ↑ recompensa agresiva por usar rueda para equilibrar
++    rew_tilt_target_bonus = 100.0          # recompensa para mantener los actuadores en la posición target
++    rew_rotation_target_bonus = 1
++    
++    # --- Penalizaciones suaves ---
++    rew_base_tilt_penalty = 5000                  # castigo por inclinación (ya lo premias con upright)
++    rew_vel_penalty = 0.005                # ← permite moverse sin miedo
++    rew_position_penalty = 0.0             # ← no bloquees la exploración espacial
++    rew_alive = 1.0                         # ← recompensa base por estar en pie
++    
++    # target positions
++    target_y_position = 0.0                
++    target_tilt_angle = 0.0
++    target_rotation_angle = 1.57
+     # reset conditions
+-    initial_joint_pos_range = [-0.5, 0.5]
+-    max_base_orientation_angle = 1.40
++    initial_joint_pos_range = [-0.2, 0.2]
++    max_base_orientation_angle = 1.20
