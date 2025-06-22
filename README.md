@@ -1,8 +1,11 @@
+
+
+
 # Project structure
 
-* Root directory is structured as follo
+* Root directory is structured as follows
 
-    ```bash
+    ```text
     |-- IsaacLab
     |   |-- _isaac_sim -> /isaac-sim
     |   |-- apps
@@ -34,7 +37,7 @@
 
     Inside /extrange_robot directory:
 
-    ```bash
+    ```text
     |-- README.md
     |-- configs
     |   `-- ExtrangeRobotPPO.yaml
